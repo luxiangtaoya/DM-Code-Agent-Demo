@@ -1,6 +1,6 @@
 """DM-Agent - 基于 ReAct 的多模型智能体系统
 
-一个支持多种 LLM API (DeepSeek、OpenAI、Claude、Gemini) 的 ReAct 智能体实现。
+支持多种 LLM API (ABC、DeepSeek、OpenAI、Qwen) 的 ReAct 智能体实现。
 """
 
 from .core import ReactAgent, Step
@@ -18,6 +18,7 @@ from .tools import Tool, default_tools
 from .prompts import build_code_agent_prompt
 from .skills import BaseSkill, ConfigSkill, SkillMetadata, SkillManager
 from .screenshot import ScreenshotManager
+from .runner import AgentRunner, AgentConfig
 
 __version__ = "1.0.0"
 
@@ -25,6 +26,9 @@ __all__ = [
     # Core
     "ReactAgent",
     "Step",
+    # Runner
+    "AgentRunner",
+    "AgentConfig",
     # Clients
     "ABCClient",
     "BaseLLMClient",
