@@ -1,0 +1,21 @@
+# ============================================================
+# DM-Code-Agent 项目依赖
+# 安装: pip install -r requirements.txt
+# 最小安装: pip install requests python-dotenv
+# ============================================================
+
+# ---- 核心依赖（必需） ----
+requests>=2.33.0          # HTTP 客户端（qwen/deepseek/abc 提供商均使用）
+python-dotenv>=1.2.0      # .env 环境变量加载
+
+# ---- 终端输出增强（可选，推荐） ----
+colorama>=0.4.6           # 彩色终端输出，无此包会自动降级
+
+# ---- LLM 提供商 SDK（按需安装） ----
+# 根据实际使用的提供商选择安装：
+
+# OpenAI / 通义千问 / DeepSeek（均兼容 OpenAI SDK）
+openai>=2.0.0
+
+# ---- 截图增强（可选） ----
+Pillow>=12.0.0            # 截图文字标注和 GIF 生成

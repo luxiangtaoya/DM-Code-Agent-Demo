@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+recorded_scripts/
+logs/
+*.log
+mcp_tools_export.json
+
+# Node (for local playwright MCP)
+node_modules/
+package.json
+package-lock.json
+
+# Playwright MCP runtime
+.playwright-mcp/
+
+# Claude Code
+.claude/
+.clinerules
