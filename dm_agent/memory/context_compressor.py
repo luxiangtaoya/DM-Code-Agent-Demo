@@ -1,4 +1,4 @@
-"""上下文压缩器 - 每 N 轮对话自动压缩上下文"""
+"""上下文压缩器 —— 当对话历史总字符数超过阈值时自动压缩。"""
 
 from __future__ import annotations
 
@@ -11,264 +11,192 @@ from ..clients.base_client import BaseLLMClient
 class ContextCompressor:
 
     """
-    每 N 轮对话自动压缩上下文
+    当对话历史总字符数超过 max_chars 时自动触发压缩。
 
-    上下文压缩器用于管理长时间对话中的token消耗问题。通过定期压缩历史对话记录，
-    保持重要的上下文信息同时减少token使用量，从而支持更长的对话序列。
-    
+    压缩方式：保留最近 keep_recent 轮完整消息，更早的消息截断拼接为一条摘要。
+
     Attributes:
-        client (Optional[BaseLLMClient]): LLM客户端，用于生成摘要（当前未使用）
-        compress_every (int): 每多少轮对话触发一次压缩
-        keep_recent (int): 保留最近的对话轮数
-        turn_count (int): 对话轮数计数器
+        client: LLM 客户端（当前未使用，预留用于语义摘要）。
+        max_chars: 总字符数阈值，超过后触发压缩（默认 10000）。
+        keep_recent: 压缩时保留的最近完整对话轮数（默认 3）。
     """
 
     def __init__(
-        self, client: Optional[BaseLLMClient] = None, compress_every: int = 5, keep_recent: int = 3
+        self,
+        client: Optional[BaseLLMClient] = None,
+        max_chars: int = 10000,
+        keep_recent: int = 3,
     ):
         """
-        初始化上下文压缩器
-        
+        初始化上下文压缩器。
+
         Args:
-            client (Optional[BaseLLMClient], optional): LLM 客户端（用于生成摘要），当前实现中未使用
-            compress_every (int, optional): 每多少轮对话触发一次压缩，默认为5轮
-            keep_recent (int, optional): 保留最近的对话轮数，默认为3轮
-            
-        Examples:
-            >>> compressor = ContextCompressor(compress_every=3, keep_recent=2)
-            >>> print(compressor.compress_every)
-            3
+            client: LLM 客户端（预留）。
+            max_chars: 对话历史总字符数阈值，超过后触发压缩。
+            keep_recent: 压缩时保留的最近对话轮数，每轮 = user + assistant 各一条。
         """
         self.client = client
-        self.compress_every = compress_every
+        self.max_chars = max_chars
         self.keep_recent = keep_recent
-        self.turn_count = 0  # 对话轮数计数
+
+    # ------------------------------------------------------------------
+    # 公共 API
+    # ------------------------------------------------------------------
 
     def should_compress(self, history: List[Dict[str, str]]) -> bool:
-        """
-        判断是否需要压缩对话历史
-        
-        通过统计用户消息数量来确定当前对话轮数，当达到设定阈值时返回True
-        
-        Args:
-            history (List[Dict[str, str]]): 对话历史列表，每个元素包含role和content键
-            
-        Returns:
-            bool: 当对话轮数达到压缩阈值时返回True，否则返回False
-            
-        Examples:
-            >>> history = [
-            ...     {"role": "user", "content": "你好"},
-            ...     {"role": "assistant", "content": "你好！有什么可以帮助你的吗？"},
-            ...     {"role": "user", "content": "分析一下这个项目"}
-            ... ]
-            >>> compressor = ContextCompressor(compress_every=2)
-            >>> compressor.should_compress(history)
-            True
-        """
-        # 统计用户消息数量（每个用户消息代表一轮对话）
-        user_messages = [msg for msg in history if msg.get("role") == "user"]
-        self.turn_count = len(user_messages)
-
-        # 每 N 轮压缩一次
-        return self.turn_count >= self.compress_every
+        """判断是否需要压缩 —— 当对话历史总字符数超过 max_chars 时返回 True。"""
+        total_chars = sum(len(msg.get("content", "")) for msg in history)
+        return total_chars > self.max_chars
 
     def compress(self, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
-        压缩对话历史
-        
-        采用提取关键信息的策略，保留最近N轮对话，将之前的对话历史压缩为摘要信息
-        
+        压缩对话历史。
+
+        保留系统消息 + 最近 keep_recent 轮完整消息，
+        更早的消息每条截取前 200 字符，拼成一条「历史对话记录」。
+
         Args:
-            history (List[Dict[str, str]]): 原始对话历史列表
-            
+            history: 原始对话历史列表。
+
         Returns:
-            result (List[Dict[str, str]]): 压缩后的对话历史列表
-            
-        Examples:
-            >>> history = [
-            ...     {"role": "system", "content": "你是一个代码助手"},
-            ...     {"role": "user", "content": "分析项目结构"},
-            ...     {"role": "assistant", "content": "正在分析..."},
-            ...     {"role": "user", "content": "读取文件A"},
-            ...     {"role": "assistant", "content": "已读取文件A"},
-            ...     {"role": "user", "content": "读取文件B"},
-            ...     {"role": "assistant", "content": "已读取文件B"}
-            ... ]
-            >>> compressor = ContextCompressor(keep_recent=1)
-            >>> compressed = compressor.compress(history)
-            >>> len(compressed)
-            4  # 系统消息 + 摘要 + 最近1轮对话(2条消息)
+            压缩后的对话历史列表。
         """
         if not history:
             return []
 
-        # 分离系统消息和其他消息
+        # 分离系统消息和非系统消息
         system_messages = [msg for msg in history if msg.get("role") == "system"]
         non_system = [msg for msg in history if msg.get("role") != "system"]
 
-        # 保留最近的消息（keep_recent 轮 = keep_recent * 2 条消息）
+        # 保留最近的消息（keep_recent 轮 = keep_recent * 2 条消息，user + assistant 各一条）
+        keep_count = self.keep_recent * 2
         recent_messages = (
-            non_system[-self.keep_recent * 2 :]
-            if len(non_system) > self.keep_recent * 2
-            else non_system
+            non_system[-keep_count:] if len(non_system) > keep_count else non_system
         )
 
         # 需要压缩的中间消息
         middle_messages = (
-            non_system[: -self.keep_recent * 2] if len(non_system) > self.keep_recent * 2 else []
+            non_system[:-keep_count] if len(non_system) > keep_count else []
         )
 
         # 如果有中间消息，进行压缩
-        compressed_middle = []
+        compressed_middle: List[Dict[str, str]] = []
         if middle_messages:
-            # 保留每条消息的发送者，截取前面部分内容，拼接为一条长字符串
-            compressed_parts = []
-            for msg in middle_messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                # 截取前面部分内容（比如前200个字符）
-                truncated_content = content[:200] + "..." if len(content) > 200 else content
-                compressed_parts.append(f"[{role}]: {truncated_content}")
-            
-            # 将所有部分拼接为一条字符串
-            compressed_content = "历史对话记录：\n" + "\n".join(compressed_parts)
-            compressed_middle = [{"role": "user", "content": compressed_content}]
+            key_info = self._extract_key_information(middle_messages)
+
+            # fallback：如果没有提取到结构化信息，则使用截断拼接
+            if not key_info:
+                compressed_parts = []
+                for msg in middle_messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    truncated = content[:200] + "..." if len(content) > 200 else content
+                    compressed_parts.append(f"[{role}]: {truncated}")
+                key_info = "历史对话记录：\n" + "\n".join(compressed_parts)
+
+            compressed_middle = [{"role": "user", "content": key_info}]
 
         # 组合：系统消息 + 压缩的中间历史 + 最近消息
-        result = system_messages + compressed_middle + recent_messages
+        return system_messages + compressed_middle + recent_messages
 
-        # 重置计数器
-        self.turn_count = len([msg for msg in result if msg.get("role") == "user"])
-
-        return result
+    # ------------------------------------------------------------------
+    # 信息提取（浏览器自动化专用）
+    # ------------------------------------------------------------------
 
     def _extract_key_information(self, messages: List[Dict[str, str]]) -> str:
-        """
-        提取式摘要：从对话历史中提取关键信息
-        
-        通过正则表达式识别和提取对话中的关键信息，包括文件路径、工具调用、错误信息和完成的任务
-        
-        Args:
-            messages (List[Dict[str, str]]): 需要提取信息的对话消息列表
-            
-        Returns:
-            str: 格式化的关键信息摘要字符串
-            
-        Examples:
-            >>> messages = [
-            ...     {"role": "user", "content": "读取文件：main.py"},
-            ...     {"role": "assistant", "content": "执行工具 read_file，输入：{'path': 'main.py'}"},
-            ...     {"role": "user", "content": "观察：成功读取文件"}
-            ... ]
-            >>> compressor = ContextCompressor()
-            >>> summary = compressor._extract_key_information(messages)
-            >>> "涉及文件" in summary
-            True
-        """
-        key_info = []
+        """从中间消息中提取关键信息，生成结构化摘要。
 
-        # 提取文件路径
-        file_paths = set()
+        针对浏览器自动化场景，提取：
+        - 已完成的操作步骤（browser_* 工具调用）
+        - 当前访问的 URL
+        - 遇到过的错误
+        - 最终的完成结果
+        """
+        if not messages:
+            return ""
+
+        parts: List[str] = []
+
+        # 1. 提取所有 browser_ 工具调用 —— 这是最重要的信息
+        actions: List[str] = []
         for msg in messages:
             content = msg.get("content", "")
-            # 查找文件路径模式
-            paths = re.findall(
-                r"(?:path|文件|读取|创建|编辑)[:：]\s*([^\s,，;；\n]+\.[a-zA-Z]+)", content
-            )
-            file_paths.update(paths)
+            # 匹配 agent 的 JSON 响应中的 action
+            for match in re.finditer(r'"action"\s*:\s*"([^"]+)"', content):
+                action = match.group(1)
+                if action.startswith("browser_") or action in ("finish", "task_complete"):
+                    actions.append(action)
 
-        if file_paths:
-            key_info.append(f"涉及文件：{', '.join(sorted(file_paths))}")
+        if actions:
+            parts.append("已执行的操作：" + " → ".join(actions))
 
-        # 提取工具调用
-        tools_used = set()
+        # 2. 提取导航过的 URL
+        urls: List[str] = []
         for msg in messages:
             content = msg.get("content", "")
-            # 查找工具名称
-            if "执行工具" in content:
-                tool_match = re.search(r"执行工具\s+(\w+)", content)
-                if tool_match:
-                    tools_used.add(tool_match.group(1))
+            for match in re.finditer(r'https?://[^\s"\'，,\n]+', content):
+                url = match.group(0).rstrip("。，.")
+                if url not in urls:
+                    urls.append(url)
+        if urls:
+            parts.append("访问过的页面：" + ", ".join(urls[-3:]))  # 最多保留最近 3 个
 
-        if tools_used:
-            key_info.append(f"使用的工具：{', '.join(sorted(tools_used))}")
+        # 3. 提取 step_abbreviation（步骤简述）
+        steps: List[str] = []
+        for msg in messages:
+            content = msg.get("content", "")
+            for match in re.finditer(r'"step_abbreviation"\s*:\s*"([^"]+)"', content):
+                abbrev = match.group(1)
+                if abbrev not in steps:
+                    steps.append(abbrev)
+        if steps:
+            parts.append("步骤列表：" + " → ".join(steps))
 
-        # 提取错误信息
+        # 4. 提取错误
         errors = []
         for msg in messages:
             content = msg.get("content", "")
-            if any(
-                keyword in content
-                for keyword in ["错误", "error", "Error", "失败", "异常"]
-            ):
-                # 提取错误相关的行（限制长度）
-                error_lines = [
-                    line
-                    for line in content.split("\n")
-                    if any(
-                        kw in line
-                        for kw in ["错误", "error", "Error", "失败", "异常"]
-                    )
-                ]
-                errors.extend(error_lines[:2])  # 最多保留 2 条
-
+            for kw in ("错误", "error", "Error", "失败", "异常"):
+                if kw in content:
+                    # 取包含关键词的行
+                    for line in content.split("\n"):
+                        if kw in line and len(line) < 200:
+                            errors.append(line.strip())
+                    break  # 每条消息最多提取一次
         if errors:
-            key_info.append(f"遇到的错误：\n" + "\n".join(errors))
+            parts.append("遇到的错误：" + "；".join(errors[:3]))
 
-        # 提取完成的任务
-        completed = []
+        # 5. 提取 finish 的最终答案
         for msg in messages:
             content = msg.get("content", "")
-            if "完成" in content or "成功" in content:
-                # 提取相关行
-                completed_lines = [
-                    line
-                    for line in content.split("\n")
-                    if "完成" in line or "成功" in line
-                ]
-                completed.extend(completed_lines[:2])
+            if '"action": "finish"' in content:
+                m = re.search(r'"action_input"\s*:\s*"([^"]*)"', content)
+                if m:
+                    parts.append("之前任务结果：" + m.group(1))
+                    break
 
-        if completed:
-            key_info.append(f"已完成的操作：\n" + "\n".join(completed))
+        if not parts:
+            return ""
 
-        # 如果没有提取到任何信息，返回通用摘要
-        if not key_info:
-            return f"进行了 {len(messages)} 轮对话，讨论了代码相关任务。"
+        return "\n".join(parts)
 
-        return "\n\n".join(key_info)
+    # ------------------------------------------------------------------
+    # 统计
+    # ------------------------------------------------------------------
 
     def get_compression_stats(
         self, original: List[Dict[str, str]], compressed: List[Dict[str, str]]
     ) -> Dict[str, Any]:
-        """
-        获取压缩统计信息
-        
-        计算并返回压缩前后的统计信息，包括消息数量、压缩率和节省的消息数
-        
-        Args:
-            original (List[Dict[str, str]]): 原始对话历史
-            compressed (List[Dict[str, str]]): 压缩后的对话历史
-            
-        Returns:
-            stats (Dict[str, Any]): 包含压缩统计信息的字典
-                - original_messages (int): 原始消息数量
-                - compressed_messages (int): 压缩后消息数量
-                - compression_ratio (float): 压缩率 (0-1之间)
-                - saved_messages (int): 节省的消息数量
-                
-        Examples:
-            >>> original = [{"role": "user", "content": "1"}, {"role": "assistant", "content": "2"}]
-            >>> compressed = [{"role": "user", "content": "历史对话摘要：..."}]
-            >>> stats = compressor.get_compression_stats(original, compressed)
-            >>> stats["saved_messages"]
-            1
-        """
+        """获取压缩统计信息。"""
+        original_chars = sum(len(msg.get("content", "")) for msg in original)
+        compressed_chars = sum(len(msg.get("content", "")) for msg in compressed)
         return {
+            "original_chars": original_chars,
+            "compressed_chars": compressed_chars,
             "original_messages": len(original),
             "compressed_messages": len(compressed),
             "compression_ratio": (
-                1 - len(compressed) / len(original) if len(original) > 0 else 0
+                1 - compressed_chars / original_chars if original_chars > 0 else 0
             ),
-            "saved_messages": len(original) - len(compressed),
+            "saved_chars": original_chars - compressed_chars,
         }

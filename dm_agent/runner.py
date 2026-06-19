@@ -42,6 +42,10 @@ class AgentConfig:
     max_steps: int = 100
     temperature: float = 0.7
 
+    # 上下文压缩
+    compress_max_chars: int = 10000   # 对话总字符数超过此值时触发压缩
+    compress_keep_recent: int = 3     # 压缩时保留最近 N 轮完整消息
+
     # ABC 专属
     abc_request_id: str = "12"
 
@@ -179,6 +183,8 @@ class AgentRunner:
                 step_callback=step_callback,
                 enable_planning=False,
                 enable_compression=True,
+                compress_max_chars=self.config.compress_max_chars,
+                compress_keep_recent=self.config.compress_keep_recent,
             )
 
             print(f"\n执行任务：{task}\n")

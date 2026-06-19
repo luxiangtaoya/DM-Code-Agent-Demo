@@ -40,6 +40,8 @@ CONFIG = AgentConfig(
     abc_request_id=_env("ABC_REQUEST_ID", "12"),
     mcp_config_path=_env("MCP_CONFIG_PATH", "mcp_config.json"),
     output_dir=_env("OUTPUT_DIR", "recorded_scripts"),
+    compress_max_chars=int(_env("COMPRESS_MAX_CHARS", "10000")),
+    compress_keep_recent=int(_env("COMPRESS_KEEP_RECENT", "3")),
 )
 
 # ============================================================

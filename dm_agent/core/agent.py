@@ -59,6 +59,8 @@ class ReactAgent:
         step_callback: Optional[Callable[[int, Step], None]] = None,   # 步骤回调函数
         enable_planning: bool = True,      # 是否启用规划
         enable_compression: bool = True,   # 是否启用上下文压缩
+        compress_max_chars: int = 10000,   # 压缩触发阈值（总字符数）
+        compress_keep_recent: int = 3,     # 压缩时保留最近 N 轮完整消息
         skill_manager: Optional[Any] = None,  # 技能管理器
     ) -> None:
         """
@@ -74,6 +76,8 @@ class ReactAgent:
                 步骤执行回调函数，可用于实时监控执行过程，默认为None
             enable_planning (bool, optional): 是否启用任务规划功能，默认为True
             enable_compression (bool, optional): 是否启用上下文压缩功能，默认为True
+            compress_max_chars (int, optional): 压缩触发阈值（总字符数），默认 10000
+            compress_keep_recent (int, optional): 压缩时保留最近N轮完整消息，默认 3
             
         Raises:
             ValueError: 当提供的工具列表为空时抛出异常
@@ -106,9 +110,12 @@ class ReactAgent:
         self.enable_planning = enable_planning
         self.planner = TaskPlanner(client, tools) if enable_planning else None
 
-        # 上下文压缩器（每 5 轮对话压缩一次）
+        # 上下文压缩器（按总字符数触发，超过 compress_max_chars 时压缩）
         self.enable_compression = enable_compression
-        self.compressor = ContextCompressor(client, compress_every=5, keep_recent=3) if enable_compression else None
+        self.compressor = (
+            ContextCompressor(client, max_chars=compress_max_chars, keep_recent=compress_keep_recent)
+            if enable_compression else None
+        )
 
         # 技能管理器
         self.skill_manager = skill_manager
@@ -182,7 +189,7 @@ class ReactAgent:
                     )
                     logger.debug(
                         f"[Agent] 压缩率：{stats['compression_ratio']:.1%}，"
-                        f"节省 {stats['saved_messages']} 条消息"
+                        f"从 {stats['original_chars']} 字符降至 {stats['compressed_chars']} 字符"
                     )
 
             # 获取 AI 响应
